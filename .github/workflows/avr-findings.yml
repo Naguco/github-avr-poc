@@ -40,6 +40,7 @@ jobs:
           AVR_CLIENT_ID: ${{ secrets.AVR_CLIENT_ID }}
           AVR_CLIENT_SECRET: ${{ secrets.AVR_CLIENT_SECRET }}
           AVR_SCOPE: ${{ vars.AVR_SCOPE }}
+          AVR_SERVER_FILTER: 'true'
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/fetch-findings.mjs
 
