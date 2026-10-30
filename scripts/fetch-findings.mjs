@@ -130,6 +130,36 @@ function plain(value) {
     .replace(/\r\n?/g, '\n').replace(/\n/g, '  \n');
 }
 
+// Recommendations contain advisory Markdown. Preserve fences and code exactly;
+// neutralize HTML and mentions in prose without escaping its Markdown syntax.
+function recommendationMarkdown(value) {
+  const escapeProse = content => content.replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/@/g, '@\u200b');
+  let fence = null;
+  const lines = text(value).replace(/\r\n?/g, '\n').split('\n').map(line => {
+    if (fence) {
+      const closing = line.match(/^ {0,3}(`+|~+)\s*$/);
+      if (closing && closing[1][0] === fence[0] && closing[1].length >= fence.length) fence = null;
+      return line;
+    }
+    const opening = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+    if (opening && (opening[1][0] !== '`' || !opening[2].includes('`'))) {
+      fence = opening[1];
+      return line;
+    }
+    let rendered = '';
+    let offset = 0;
+    for (const match of line.matchAll(/(`+)(?!`)(.*?)\1(?!`)/g)) {
+      rendered += escapeProse(line.slice(offset, match.index)) + match[0];
+      offset = match.index + match[0].length;
+    }
+    return rendered + escapeProse(line.slice(offset));
+  });
+  // A malformed advisory must not swallow the managed metadata into its code block.
+  if (fence) lines.push(fence);
+  return lines.join('\n');
+}
+
 function list(value) {
   return Array.isArray(value) && value.length ? value.map(text).join('\n') : 'None reported';
 }
@@ -152,7 +182,7 @@ export function findingBody(finding) {
     `**Affected packages:** ${plain(list(finding.packageNames))}`,
     `**Vulnerabilities:** ${plain(list(finding.activeCves))}  \n**Severity:** ${severity(finding)} · **CVSS:** ${plain(finding.maxCvss)}`,
     `### Description\n\n${plain(finding.description)}`,
-    `### Recommendation\n\n${plain(finding.recommendation)}`,
+    `### Recommendation\n\n${recommendationMarkdown(finding.recommendation)}`,
     '<details>\n<summary>AVR details</summary>\n',
     ...fields.map(([label, value]) => `**${label}:** ${plain(value)}`),
     '</details>',

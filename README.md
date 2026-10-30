@@ -161,11 +161,11 @@ Put investigation notes in issue comments. The script replaces the issue body wh
 
 Each issue includes the application, affected packages, severity, CVSS score, vulnerability identifiers, advisory reference, timestamps, description, and recommendation. Findings with no CVE or score are included too. For example, a malicious-package report may have neither. An empty severity is shown as `UNKNOWN`.
 
-Titles use `hello-world: <advisory> in <packages>`. The body starts with affected packages, vulnerability identifiers, severity, and CVSS, followed by the description and recommendation. The remaining metadata is under an expandable **AVR details** section. Everything is normal text, without code blocks or tables.
+Titles use `hello-world: <advisory> in <packages>`. The body starts with affected packages, vulnerability identifiers, severity, and CVSS, followed by the description and recommendation. The remaining metadata is under an expandable **AVR details** section. The summary and metadata use normal text, without code blocks or tables; recommendations keep the advisory's Markdown, including embedded code blocks.
 
 The script adds `avr`, `security`, `app:hello-world`, and one `severity:` label (`critical`, `high`, `moderate`, `low`, or `unknown`). It creates missing labels in the repository without changing existing label colors. When severity changes, it replaces the old severity label and keeps unrelated labels you added manually. The GitHub token must also have permission to create labels; the workflow's `issues: write` permission covers this.
 
-Descriptions and recommendations retain their content as normal text. HTML, Markdown formatting, and mentions from the service are escaped so they do not become active content. The advisory URL is provided as text. Only unusually large issue bodies are truncated to stay below GitHub's size limit; the JSON report retains complete finding data. Recommendations are not run or automatically applied. Existing managed issues adopt this format on the next synchronization; you do not need to delete them first.
+Descriptions are escaped as normal text. Recommendations preserve headings, lists, links, inline code, and fenced code blocks. HTML and mentions in recommendation prose are neutralized; code contents are left unchanged. An unclosed code fence is closed before the AVR metadata. The advisory URL in the metadata is provided as text. Only unusually large issue bodies are truncated to stay below GitHub's size limit; the JSON report retains complete finding data. Embedded code is displayed only, never run or automatically applied. Existing managed issues adopt this format on the next synchronization; you do not need to delete them first.
 
 ## Download the reports
 

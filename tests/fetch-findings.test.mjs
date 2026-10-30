@@ -204,8 +204,8 @@ test('empty results never close existing issues', async () => {
   assert.equal(counts.updated, 0);
 });
 
-test('compact bodies preserve full content as escaped normal text', () => {
-  const body = findingBody({ ...finding, recommendation: '```\n@someone <script>test</script>\n```' });
+test('compact summary and description remain escaped normal text', () => {
+  const body = findingBody({ ...finding, description: '```\n@someone <script>test</script>\n```' });
   assert.ok(!body.includes('```'));
   assert.ok(!body.includes('<script>'));
   assert.ok(!body.includes('@someone'));
@@ -214,6 +214,30 @@ test('compact bodies preserve full content as escaped normal text', () => {
   assert.ok(body.startsWith(issueMarker(finding)));
   assert.ok(findingBody({ ...finding, recommendation: 'a'.repeat(25_000) }).includes('a'.repeat(25_000)));
   assert.ok(!body.includes('| ---'));
+});
+
+test('recommendations preserve Markdown, code fences, and code contents', () => {
+  const recommendation = [
+    '## Summary', '', 'Review **size limits** and `config.maxBodyLength`.', '',
+    '[Advisory](https://example.com/advisory)', '', '```js',
+    'if (size < limit && enabled) { console.log("@someone <script>"); }', '```', '',
+    '~~~bash', 'node --max-old-space-size=100 poc.js', '~~~', '',
+    '1. Enforce limits.', '2. Stream decoding.',
+  ].join('\n');
+  const body = findingBody({ ...finding, recommendation });
+  assert.ok(body.includes(`### Recommendation\n\n${recommendation}\n\n<details>`));
+  assert.ok(!body.includes('\\`'));
+});
+
+test('recommendation prose neutralizes HTML and mentions but preserves inline code', () => {
+  const body = findingBody({ ...finding, recommendation: '<script>test</script> @someone\n`a < b && @example`' });
+  assert.ok(body.includes('&lt;script&gt;test&lt;/script&gt; @\u200bsomeone'));
+  assert.ok(body.includes('`a < b && @example`'));
+});
+
+test('unclosed recommendation fences are closed before AVR metadata', () => {
+  const body = findingBody({ ...finding, recommendation: '````js\nconst example = "```";' });
+  assert.ok(body.includes('const example = "```";\n````\n\n<details>'));
 });
 
 test('GitHub issue write failures fail synchronization', async () => {
