@@ -145,8 +145,8 @@ The first line of every managed issue body contains:
 | Finding/issue state | Action |
 | --- | --- |
 | No matching issue | Create an issue |
-| Existing open issue, changed content | Update its title and body |
-| Existing open issue, identical content | No write |
+| Existing open issue, changed content or managed labels | Update its title, body, and labels |
+| Existing open issue, identical content and labels | No write |
 | Existing closed issue, finding returned | Reopen and refresh the same issue |
 | Finding absent from response | Leave existing issue unchanged |
 | Multiple issues with the same marker | Fail before writing; require manual resolution |
@@ -161,7 +161,11 @@ Put investigation notes in issue comments. The script replaces the issue body wh
 
 Each issue includes the application, affected packages, severity, CVSS score, vulnerability identifiers, advisory reference, timestamps, description, and recommendation. Findings with no CVE or score are included too. For example, a malicious-package report may have neither. An empty severity is shown as `UNKNOWN`.
 
-Descriptions and recommendations are displayed as literal text, including embedded code, rather than executable HTML or active Markdown. The advisory URL is provided as text. Long issue fields are truncated to keep issues manageable; the JSON report retains complete finding data. Recommendations are not run or automatically applied.
+Titles use `hello-world: <advisory> in <packages>`. The body starts with affected packages, vulnerability identifiers, severity, and CVSS, followed by the description and recommendation. The remaining metadata is under an expandable **AVR details** section. Everything is normal text, without code blocks or tables.
+
+The script adds `avr`, `security`, `app:hello-world`, and one `severity:` label (`critical`, `high`, `moderate`, `low`, or `unknown`). It creates missing labels in the repository without changing existing label colors. When severity changes, it replaces the old severity label and keeps unrelated labels you added manually. The GitHub token must also have permission to create labels; the workflow's `issues: write` permission covers this.
+
+Descriptions and recommendations retain their content as normal text. HTML, Markdown formatting, and mentions from the service are escaped so they do not become active content. The advisory URL is provided as text. Only unusually large issue bodies are truncated to stay below GitHub's size limit; the JSON report retains complete finding data. Recommendations are not run or automatically applied. Existing managed issues adopt this format on the next synchronization; you do not need to delete them first.
 
 ## Download the reports
 

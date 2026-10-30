@@ -123,13 +123,11 @@ function text(value) {
   return value == null || value === '' ? 'Not provided' : String(value);
 }
 
-// Render service-supplied content literally: no active HTML, mentions, or
-// embedded Markdown links/images from vulnerability descriptions.
-function literal(value, maxLength = 20_000) {
-  const content = text(value).slice(0, maxLength);
-  const runs = content.match(/`+/g) || [];
-  const fence = '`'.repeat(Math.max(3, ...runs.map(run => run.length + 1)));
-  return `${fence}text\n${content}\n${fence}${text(value).length > maxLength ? '\n[Truncated; see JSON report for complete content.]' : ''}`;
+// Keep supplied content as normal text, without active HTML, Markdown, or mentions.
+function plain(value) {
+  return text(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/([\\`*_{}\[\]()#+.!|~-])/g, '\\$1').replace(/@/g, '@\u200b')
+    .replace(/\r\n?/g, '\n').replace(/\n/g, '  \n');
 }
 
 function list(value) {
@@ -140,11 +138,7 @@ export function findingBody(finding) {
   const fields = [
     ['Application', finding.appName],
     ['Application ID', finding.appId],
-    ['Severity', finding.severity || 'UNKNOWN'],
-    ['CVSS score', finding.maxCvss],
     ['CVSS vector', finding.cvssVector],
-    ['Affected packages', list(finding.packageNames)],
-    ['Active vulnerability identifiers', list(finding.activeCves)],
     ['Source vulnerability ID', finding.sourceVulnerabilityId],
     ['Source', finding.sourceId],
     ['Advisory URL', finding.vulnerabilityUrl],
@@ -155,19 +149,40 @@ export function findingBody(finding) {
   ];
   return [
     issueMarker(finding),
-    '# Application vulnerability report finding',
-    '> Beta-service finding. Review applicability and remediation before taking action.',
-    ...fields.map(([label, value]) => `## ${label}\n${literal(value, 1000)}`),
-    `## Description\n${literal(finding.description, 5000)}`,
-    `## Recommendation\n${literal(finding.recommendation)}`,
-    '---\nManaged by the AVR PoC. This body is refreshed on each synchronization. Keep investigation notes in comments. Closed issues are reopened when their finding is returned again; missing findings are not automatically closed.',
+    `**Affected packages:** ${plain(list(finding.packageNames))}`,
+    `**Vulnerabilities:** ${plain(list(finding.activeCves))}  \n**Severity:** ${severity(finding)} · **CVSS:** ${plain(finding.maxCvss)}`,
+    `### Description\n\n${plain(finding.description)}`,
+    `### Recommendation\n\n${plain(finding.recommendation)}`,
+    '<details>\n<summary>AVR details</summary>\n',
+    ...fields.map(([label, value]) => `**${label}:** ${plain(value)}`),
+    '</details>',
+    'Beta-service finding; review applicability before taking action. Managed by the AVR PoC: keep investigation notes in comments. Recurring findings reopen issues; missing findings do not close them.',
   ].join('\n\n');
 }
 
+function severity(finding) {
+  return ['CRITICAL', 'HIGH', 'MODERATE', 'LOW'].includes(finding.severity) ? finding.severity : 'UNKNOWN';
+}
+
+const LABELS = [
+  { name: 'avr', color: '005A9C' },
+  { name: 'security', color: 'B60205' },
+  { name: 'app:hello-world', color: '1D76DB' },
+  ...Object.entries({ critical: 'B60205', high: 'D93F0B', moderate: 'FBCA04', low: '0E8A16', unknown: 'BFD4F2' })
+    .map(([level, color]) => ({ name: `severity:${level}`, color })),
+];
+
+function findingLabels(finding, issue) {
+  const managed = new Set(LABELS.map(label => label.name));
+  const manual = (issue?.labels || []).map(label => typeof label === 'string' ? label : label.name)
+    .filter(name => !managed.has(name.toLowerCase()));
+  return [...new Set([...manual, 'avr', 'security', 'app:hello-world', `severity:${severity(finding).toLowerCase()}`])];
+}
+
 function findingTitle(finding) {
-  const severity = ['CRITICAL', 'HIGH', 'MODERATE', 'LOW'].includes(finding.severity) ? finding.severity : 'UNKNOWN';
   const advisory = text(finding.sourceVulnerabilityId).replace(/[\r\n\x00-\x1f]/g, ' ').slice(0, 100);
-  return `[AVR][${severity}] hello-world: ${advisory}`;
+  const packages = Array.isArray(finding.packageNames) ? finding.packageNames.join(', ') : '';
+  return `hello-world: ${advisory}${packages ? ` in ${packages}` : ''}`.replace(/[\r\n\x00-\x1f]/g, ' ').slice(0, 240);
 }
 
 export async function synchronizeIssues(findings, env, fetchImpl = fetch) {
@@ -198,22 +213,40 @@ export async function synchronizeIssues(findings, env, fetchImpl = fetch) {
     return { finding, issue: matches[0] };
   });
   const counts = { created: 0, updated: 0, reopened: 0, unchanged: 0 };
+  if (operations.length) {
+    const labelBase = `${GITHUB_API}/repos/${repository}/labels`;
+    const known = new Set();
+    for (let page = 1; ; page++) {
+      if (page > 1000) throw new Error('GitHub label pagination page limit exceeded.');
+      const batch = await requestJson(`${labelBase}?per_page=100&page=${page}`, { method: 'GET', headers }, fetchImpl, 'GitHub');
+      if (!Array.isArray(batch)) throw new Error('GitHub returned an invalid label list.');
+      for (const label of batch) known.add(label.name.toLowerCase());
+      if (batch.length < 100) break;
+    }
+    const needed = new Set(operations.flatMap(({ finding }) => findingLabels(finding)));
+    for (const label of LABELS.filter(label => needed.has(label.name) && !known.has(label.name))) {
+      await requestJson(labelBase, { method: 'POST', headers, body: JSON.stringify(label) }, fetchImpl, 'GitHub');
+    }
+  }
   for (const { finding, issue } of operations) {
     const title = findingTitle(finding);
+    const labels = findingLabels(finding, issue);
+    const currentLabels = (issue?.labels || []).map(label => typeof label === 'string' ? label : label.name);
+    const labelsChanged = JSON.stringify([...currentLabels].sort()) !== JSON.stringify([...labels].sort());
     const fullBody = findingBody(finding);
     // GitHub limits issue bodies to 65,536 characters. Bound unusually long
-    // service content (including generated code fences), keeping the marker.
+    // service content, keeping the marker. Full data remains in the JSON report.
     const body = fullBody.length > 60_000
       ? fullBody.slice(0, 60_000) + '\n\n[Issue body truncated; see JSON report for complete finding data.]'
       : fullBody;
     if (!issue) {
-      const created = await requestJson(base, { method: 'POST', headers, body: JSON.stringify({ title, body }) }, fetchImpl, 'GitHub');
+      const created = await requestJson(base, { method: 'POST', headers, body: JSON.stringify({ title, body, labels }) }, fetchImpl, 'GitHub');
       existing.push(created);
       counts.created++;
-    } else if (issue.state === 'closed' || issue.title !== title || issue.body !== body) {
+    } else if (issue.state === 'closed' || issue.title !== title || issue.body !== body || labelsChanged) {
       await requestJson(`${base}/${issue.number}`, {
         method: 'PATCH', headers,
-        body: JSON.stringify({ title, body, ...(issue.state === 'closed' ? { state: 'open' } : {}) }),
+        body: JSON.stringify({ title, body, labels, ...(issue.state === 'closed' ? { state: 'open' } : {}) }),
       }, fetchImpl, 'GitHub');
       counts[issue.state === 'closed' ? 'reopened' : 'updated']++;
     } else {

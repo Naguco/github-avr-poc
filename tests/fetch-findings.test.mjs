@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   APP_NAME, filterFindings, findingBody,
-  getAccessToken, issueMarker, main, requestJson, retrieveFindings, serviceEndpoints, synchronizeIssues,
+  getAccessToken, issueMarker, main, requestJson, retrieveFindings, serviceEndpoints, synchronizeIssues as syncIssues,
 } from '../scripts/fetch-findings.mjs';
 
 const env = {
@@ -18,6 +18,13 @@ const finding = {
   description: 'Synthetic test finding', recommendation: 'Upgrade the affected component.',
 };
 const response = (data, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => data });
+const labelNames = ['avr', 'security', 'app:hello-world', ...['critical', 'high', 'moderate', 'low', 'unknown'].map(level => `severity:${level}`)];
+// Existing issue-lifecycle tests assume repository labels already exist.
+function synchronizeIssues(findings, environment, fetchImpl) {
+  return syncIssues(findings, environment, (url, options) => url.includes('/labels?')
+    ? Promise.resolve(response(labelNames.map(name => ({ name }))))
+    : fetchImpl(url, options));
+}
 
 test('service-key base URLs build customer-specific endpoints and normalize trailing slashes', () => {
   assert.deepEqual(serviceEndpoints({
@@ -197,10 +204,16 @@ test('empty results never close existing issues', async () => {
   assert.equal(counts.updated, 0);
 });
 
-test('recommendations remain literal even with embedded code fences and mentions', () => {
+test('compact bodies preserve full content as escaped normal text', () => {
   const body = findingBody({ ...finding, recommendation: '```\n@someone <script>test</script>\n```' });
-  assert.ok(body.includes('````text\n```\n@someone <script>test</script>\n```\n````'));
-  assert.ok(findingBody({ ...finding, recommendation: 'a'.repeat(25_000) }).includes('[Truncated;'));
+  assert.ok(!body.includes('```'));
+  assert.ok(!body.includes('<script>'));
+  assert.ok(!body.includes('@someone'));
+  assert.ok(body.includes('&lt;script&gt;test&lt;/script&gt;'));
+  assert.ok(body.includes('<summary>AVR details</summary>'));
+  assert.ok(body.startsWith(issueMarker(finding)));
+  assert.ok(findingBody({ ...finding, recommendation: 'a'.repeat(25_000) }).includes('a'.repeat(25_000)));
+  assert.ok(!body.includes('| ---'));
 });
 
 test('GitHub issue write failures fail synchronization', async () => {
@@ -214,10 +227,50 @@ test('severity and timestamps can change without changing issue identity', async
     if (options.method === 'GET') return response([{ number: 15, body: findingBody(finding), title: 'Previous title', state: 'open' }]);
     assert.equal(options.method, 'PATCH');
     assert.ok(url.endsWith('/15'));
-    assert.match(JSON.parse(options.body).title, /CRITICAL/);
-    assert.match(JSON.parse(options.body).body, /2026-10-30/);
+    assert.ok(JSON.parse(options.body).labels.includes('severity:critical'));
+    assert.ok(!JSON.parse(options.body).title.includes('[AVR]'));
+    assert.ok(JSON.parse(options.body).body.includes('2026\\-10\\-30'));
     return response({});
   });
   assert.equal(counts.updated, 1);
   assert.equal(counts.created, 0);
+});
+
+test('missing repository labels are created and attached to new issues', async () => {
+  const createdLabels = [];
+  await syncIssues([finding], env, async (url, options) => {
+    if (options.method === 'GET') return response([]);
+    const body = JSON.parse(options.body);
+    if (url.endsWith('/labels')) {
+      createdLabels.push(body.name);
+      assert.match(body.color, /^[0-9A-F]{6}$/);
+      return response(body, 201);
+    }
+    assert.deepEqual(body.labels, ['avr', 'security', 'app:hello-world', 'severity:high']);
+    assert.equal(body.title, 'hello-world: GHSA-example in pkg:npm/example@1.0.0');
+    return response({ number: 1, ...body, state: 'open' }, 201);
+  });
+  assert.deepEqual(createdLabels, ['avr', 'security', 'app:hello-world', 'severity:high']);
+});
+
+test('severity label updates preserve manually added labels', async () => {
+  await synchronizeIssues([{ ...finding, severity: 'LOW' }], env, async (_url, options) => {
+    if (options.method === 'GET') return response([{
+      number: 1, body: findingBody(finding), state: 'open',
+      labels: ['avr', 'security', 'app:hello-world', 'severity:high', 'investigating'].map(name => ({ name })),
+    }]);
+    const labels = JSON.parse(options.body).labels;
+    assert.ok(labels.includes('investigating'));
+    assert.ok(labels.includes('severity:low'));
+    assert.ok(!labels.includes('severity:high'));
+    return response({});
+  });
+});
+
+test('label creation errors fail before any issue writes', async () => {
+  await assert.rejects(syncIssues([finding], env, async (url, options) => {
+    if (options.method === 'GET') return response([]);
+    assert.ok(url.endsWith('/labels'));
+    return response({}, 403);
+  }), /GitHub request failed: HTTP 403/);
 });
