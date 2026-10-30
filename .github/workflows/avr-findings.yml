@@ -1,0 +1,53 @@
+name: AVR findings for hello-world
+
+on:
+  schedule:
+    # Midnight UTC every Tuesday and Friday.
+    - cron: '0 0 * * 2,5'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+# Share this group across manual/scheduled runs and branches.
+concurrency:
+  group: avr-hello-world-issue-sync
+  cancel-in-progress: false
+
+jobs:
+  findings:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Run mock-based tests
+        run: node --test
+
+      - name: Retrieve findings and synchronize issues
+        env:
+          AVR_BASE_URL: ${{ vars.AVR_BASE_URL }}
+          AVR_UAA_URL: ${{ vars.AVR_UAA_URL }}
+          AVR_CLIENT_ID: ${{ secrets.AVR_CLIENT_ID }}
+          AVR_CLIENT_SECRET: ${{ secrets.AVR_CLIENT_SECRET }}
+          AVR_SCOPE: ${{ vars.AVR_SCOPE }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/fetch-findings.mjs
+
+      - name: Upload filtered reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: hello-world-avr-reports-${{ github.run_id }}
+          path: reports/
+          retention-days: 7
+          if-no-files-found: ignore
