@@ -34,8 +34,8 @@ The script and tests use Node.js 24's built-in APIs. You do not need to run `npm
 ## Before you start
 
 1. An eligible SAP BTP trial or enterprise subaccount, **not production**, with **Beta Enabled** set.
-2. AVR enabled for your landscape according to SAP's current instructions.
-3. Your own AVR service instance and service key, with credentials allowed to read provider findings. You need to set these up in SAP; the script does not create services, keys, or permissions.
+2. AVR enabled for your landscape [according to SAP's current instructions](https://help.sap.com/docs/application-vulnerability-report/application-vulnerability-report-e02c6e1a86544ce981810c8c8a12e750/initial-setup).
+3. Your own AVR service instance and service key, with credentials allowed to read provider findings. [You need to set these up in SAP BAIP](https://help.sap.com/docs/application-vulnerability-report/application-vulnerability-report-e02c6e1a86544ce981810c8c8a12e750/authentication); the script does not create services, keys, or permissions.
 4. A private GitHub repository with Issues and Actions enabled, and permission to add repository secrets. Findings contain vulnerability and landscape information that should not be published unintentionally.
 5. Access to the SAP endpoints from the GitHub-hosted runner. If your organization restricts that access, use a runner that meets its network and security requirements.
 
@@ -43,7 +43,7 @@ The script and tests use Node.js 24's built-in APIs. You do not need to run `npm
 
 Copy the files, including the hidden `.github` directory, into your repository. Commit and push them to the default branch, which GitHub uses for scheduled workflows. The schedule will not run from this local folder.
 
-Before enabling the workflow, review who can change workflow files or access repository secrets. Do not add a pull-request trigger that exposes SAP credentials to untrusted code.
+Before enabling the workflow, review who can change workflow files or access repository secrets. Do not add a pull-request trigger that exposes SAP BAIP credentials to untrusted code.
 
 ## Configure authentication
 
@@ -87,7 +87,7 @@ client_secret=<client secret>
 
 The script uses the returned `access_token` in the AVR request's `Authorization: Bearer …` header. It gets a new token for each run, masks it in Actions logs, and leaves it out of the reports. Client credentials are not logged either.
 
-This example sends the client credentials in the POST body. If your client requires HTTP Basic authentication instead, change `getAccessToken()` and its tests before running it.
+This example sends the client credentials in the POST body. If your client requires X509 instead, change `getAccessToken()` and its tests before running it.
 
 GitHub supplies `github.token` automatically, so you do not need a personal access token for the workflow. It requests `contents: read` and `issues: write`. Your organization's Actions policy must allow it to write issues.
 
@@ -116,13 +116,13 @@ value.filter(item => item.appName === 'hello-world')
 
 This is an exact, case-sensitive match. It excludes `hello-world-srv` and every other application name. If more than one deployed application is named `hello-world`, their findings will all be included. Add an `appId` check if you want to select a single deployment.
 
-If you have confirmed support for OData filtering on this beta endpoint, add `AVR_SERVER_FILTER: 'true'` to the workflow retrieval step's `env`. This additionally sends:
+According to the official documentation, the retrieval endpoint support OData requests, so add `AVR_SERVER_FILTER: 'true'` to the workflow retrieval step's `env`. This additionally sends:
 
 ```text
 $filter=appName eq 'hello-world'
 ```
 
-The script still checks the application name locally when this option is enabled. If the endpoint rejects the OData filter, the run fails. Leave the option unset unless you have checked that the endpoint supports it.
+The script still checks the application name locally when this option is enabled. If the endpoint rejects the OData filter, the run fails.
 
 Both configured base URLs must use HTTPS, without embedded credentials, query strings, or fragments. The script follows `@odata.nextLink` and rejects links outside the configured AVR service origin, credentials embedded in links, fragments, loops, or more than 1,000 pages. HTTP redirects are rejected for both SAP and GitHub requests. A GET carries no request body.
 
